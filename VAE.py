@@ -15,7 +15,6 @@
 
 from __future__ import print_function
 import torch.utils.data
-from scipy import misc
 from torch import optim
 from torchvision.utils import save_image
 from net import *
@@ -42,7 +41,7 @@ def loss_function(recon_x, x, mu, logvar):
 
 
 def process_batch(batch):
-    data = [misc.imresize(x, [im_size, im_size]).transpose((2, 0, 1)) for x in batch]
+    data = [x.transpose((2, 0, 1)) for x in batch]
 
     x = torch.from_numpy(np.asarray(data, dtype=np.float32)).cuda() / 127.5 - 1.
     x = x.view(-1, 3, im_size, im_size)
@@ -57,7 +56,7 @@ def main():
     vae.train()
     vae.weight_init(mean=0, std=0.02)
 
-    lr = 0.0005
+    lr = 0.0004
 
     vae_optimizer = optim.Adam(vae.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=1e-5)
  
@@ -82,8 +81,8 @@ def main():
 
         epoch_start_time = time.time()
 
-        if (epoch + 1) % 8 == 0:
-            vae_optimizer.param_groups[0]['lr'] /= 4
+        if (epoch + 1) % 4 == 0:
+            vae_optimizer.param_groups[0]['lr'] /= 2
             print("learning rate change!")
 
         i = 0
@@ -128,11 +127,14 @@ def main():
                     resultsample = resultsample.cpu()
                     save_image(resultsample.view(-1, 3, im_size, im_size),
                                'results_gen/sample_' + str(epoch) + "_" + str(i) + '.png')
-
+                    resultsample = resultsample.view(-1, 3, im_size, im_size).numpy()
+                    resultsample = (resultsample * 255).astype(np.uint8)
+                    np.save('results_gen/sample_' + str(epoch) + "_" + str(i) + '.npy', resultsample)
         del batches
         del data_train
-    print("Training finish!... save training results")
-    torch.save(vae.state_dict(), "VAEmodel.pkl")
+        print("Training finish!... save training results")
+        if i + 1 % 5 == 0:
+            torch.save(vae.state_dict(), "VAEmodel_epoch{}.pkl".format(epoch+1))
 
 if __name__ == '__main__':
     main()
