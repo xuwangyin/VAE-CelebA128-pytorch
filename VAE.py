@@ -21,12 +21,21 @@ from net import *
 import numpy as np
 import pickle
 import time
+import torch.nn as nn
 import random
 import os
 from dlutils import batch_provider
 from dlutils.pytorch.cuda_helper import *
+import argparse
 
-im_size = 128
+parser = argparse.ArgumentParser()
+parser.add_argument('--resume', type=str)
+parser.add_argument('--lr', type=float, default=0.0002)
+parser.add_argument('--img_size', type=int, default=128)
+args = parser.parse_args()
+
+
+device = 'cuda'
 
 
 def loss_function(recon_x, x, mu, logvar):
@@ -43,8 +52,8 @@ def loss_function(recon_x, x, mu, logvar):
 def process_batch(batch):
     data = [x.transpose((2, 0, 1)) for x in batch]
 
-    x = torch.from_numpy(np.asarray(data, dtype=np.float32)).cuda() / 127.5 - 1.
-    x = x.view(-1, 3, im_size, im_size)
+    x = torch.from_numpy(np.array(data, dtype=np.float32)).to(device) / 127.5 - 1.
+    x = x.view(-1, 3, args.img_size, args.img_size)
     return x
 
 
@@ -52,22 +61,26 @@ def main():
     batch_size = 128
     z_size = 512
     vae = VAE(zsize=z_size, layer_count=5)
-    vae.cuda()
     vae.train()
     vae.weight_init(mean=0, std=0.02)
+    vae = nn.DataParallel(vae)
+    vae.to(device)
 
-    lr = 0.0004
+    if args.resume is not None:
+        vae.load_state_dict(torch.load(args.resume))
 
-    vae_optimizer = optim.Adam(vae.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=1e-5)
+    vae_optimizer = optim.Adam(vae.parameters(), lr=args.lr, betas=(0.5, 0.999), weight_decay=1e-5)
  
     train_epoch = 40
 
-    sample1 = torch.randn(128, z_size).view(-1, z_size, 1, 1)
+    sample1 = torch.randn(64, z_size).view(-1, z_size, 1, 1)
+
+    folds = 2
 
     for epoch in range(train_epoch):
         vae.train()
 
-        with open('data_fold_%d.pkl' % (epoch % 5), 'rb') as pkl:
+        with open('bedroom128_splits/data_fold_%d.pkl' % (epoch % folds), 'rb') as pkl:
             data_train = pickle.load(pkl)
 
         print("Train set size:", len(data_train))
@@ -81,12 +94,14 @@ def main():
 
         epoch_start_time = time.time()
 
-        if (epoch + 1) % 4 == 0:
-            vae_optimizer.param_groups[0]['lr'] /= 2
-            print("learning rate change!")
+        # if (epoch + 1) % 2 == 0:
+        #     vae_optimizer.param_groups[0]['lr'] /= 2
+        #     print("learning rate change!")
 
         i = 0
         for x in batches:
+            if x.shape[0] != batch_size:
+                break
             vae.train()
             vae.zero_grad()
             rec, mu, logvar = vae(x)
@@ -106,7 +121,7 @@ def main():
             per_epoch_ptime = epoch_end_time - epoch_start_time
 
             # report losses and save samples each 60 iterations
-            m = 60
+            m = 100
             i += 1
             if i % m == 0:
                 rec_loss /= m
@@ -120,21 +135,26 @@ def main():
                     x_rec, _, _ = vae(x)
                     resultsample = torch.cat([x, x_rec]) * 0.5 + 0.5
                     resultsample = resultsample.cpu()
-                    save_image(resultsample.view(-1, 3, im_size, im_size),
+                    save_image(resultsample.view(-1, 3, args.img_size, args.img_size),
                                'results_rec/sample_' + str(epoch) + "_" + str(i) + '.png')
-                    x_rec = vae.decode(sample1)
+
+                    resultsample = resultsample.view(-1, 3, args.img_size, args.img_size).numpy()
+                    resultsample = (resultsample * 255).transpose([0, 2, 3, 1]).astype(np.uint8)
+                    np.save('results_rec/sample_' + str(epoch) + "_" + str(i) + '.npy', resultsample)
+
+                    x_rec = vae.module.decode(sample1)
                     resultsample = x_rec * 0.5 + 0.5
                     resultsample = resultsample.cpu()
-                    save_image(resultsample.view(-1, 3, im_size, im_size),
+                    save_image(resultsample.view(-1, 3, args.img_size, args.img_size),
                                'results_gen/sample_' + str(epoch) + "_" + str(i) + '.png')
-                    resultsample = resultsample.view(-1, 3, im_size, im_size).numpy()
-                    resultsample = (resultsample * 255).astype(np.uint8)
+
+                    resultsample = resultsample.view(-1, 3, args.img_size, args.img_size).numpy()
+                    resultsample = (resultsample * 255).transpose([0, 2, 3, 1]).astype(np.uint8)
                     np.save('results_gen/sample_' + str(epoch) + "_" + str(i) + '.npy', resultsample)
         del batches
         del data_train
         print("Training finish!... save training results")
-        if i + 1 % 5 == 0:
-            torch.save(vae.state_dict(), "VAEmodel_epoch{}.pkl".format(epoch+1))
+        torch.save(vae.state_dict(), "VAEmodel_epoch{}.pkl".format(epoch+1))
 
 if __name__ == '__main__':
     main()

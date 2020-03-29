@@ -80,7 +80,7 @@ class VAE(nn.Module):
         for i in range(1, self.layer_count):
             x = F.leaky_relu(getattr(self, "deconv%d_bn" % (i + 1))(getattr(self, "deconv%d" % (i + 1))(x)), 0.2)
 
-        x = F.tanh(getattr(self, "deconv%d" % (self.layer_count + 1))(x))
+        x = torch.tanh(getattr(self, "deconv%d" % (self.layer_count + 1))(x))
         return x
 
     def forward(self, x):
